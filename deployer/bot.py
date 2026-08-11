@@ -37,13 +37,75 @@ def load_config() -> dict:
         return json.load(handle)
 
 
+def validate_config(config: dict) -> None:
+    """Refuse to start with an open/unconfigured bot."""
+    errors: list[str] = []
+    if not int(config.get("guild_id") or 0):
+        errors.append("guild_id must be set to your Discord server ID")
+    if not int(config.get("announce_channel_id") or 0):
+        errors.append("announce_channel_id must be set")
+    roles = config.get("admin_role_ids") or []
+    if not roles:
+        errors.append(
+            "admin_role_ids must list at least one role ID "
+            "(Discord Administrator does not grant access unless "
+            "allow_guild_administrators is true)"
+        )
+    if not (config.get("gameserver_container") or "").strip():
+        errors.append("gameserver_container must match the gameserver container name")
+    if errors:
+        joined = "\n  - ".join(errors)
+        raise SystemExit(
+            "Invalid deployer/config.json:\n  - "
+            f"{joined}\n"
+            "Copy deployer/config.example.json and fill in the required fields."
+        )
+
+
 def is_admin(config: dict, user: discord.abc.User) -> bool:
     if not isinstance(user, discord.Member):
         return False
-    if user.guild_permissions.administrator:
-        return True
     admin_roles = set(config.get("admin_role_ids", []))
-    return any(role.id in admin_roles for role in user.roles)
+    if any(role.id in admin_roles for role in user.roles):
+        return True
+    if config.get("allow_guild_administrators") and user.guild_permissions.administrator:
+        return True
+    return False
+
+
+def console_command_allowed(config: dict, command: str) -> bool:
+    patterns = config.get("console_command_allowlist")
+    if patterns is None:
+        patterns = [r"^help$", r"^save(\s|$)", r"^coop\.debug\..+"]
+    if not patterns:
+        return False
+    return any(re.search(pattern, command) for pattern in patterns)
+
+
+class RateLimiter:
+    """Simple per-user limits for console spam and deploy spam."""
+
+    def __init__(self):
+        self._console_hits: dict[int, list[float]] = {}
+        self._action_last: dict[int, float] = {}
+
+    def check_console(self, user_id: int, per_minute: int) -> str | None:
+        now = time.monotonic()
+        window = self._console_hits.setdefault(user_id, [])
+        self._console_hits[user_id] = [t for t in window if now - t < 60.0]
+        if len(self._console_hits[user_id]) >= per_minute:
+            return f"Console rate limit exceeded ({per_minute}/minute). Try again shortly."
+        self._console_hits[user_id].append(now)
+        return None
+
+    def check_action(self, user_id: int, cooldown_s: float) -> str | None:
+        now = time.monotonic()
+        last = self._action_last.get(user_id, 0.0)
+        remaining = cooldown_s - (now - last)
+        if remaining > 0:
+            return f"Please wait {int(remaining) + 1}s before starting another deploy/rollback/restart."
+        self._action_last[user_id] = now
+        return None
 
 
 class ProgressReporter:
@@ -86,6 +148,7 @@ class UpdaterBot(commands.Bot):
         self.state = State(Path(config["state_file"]))
         self.deployer = Deployer(config, self.state)
         self.deploy_lock = asyncio.Lock()
+        self.rate_limiter = RateLimiter()
 
     async def setup_hook(self) -> None:
         self.add_dynamic_items(DeployButton, DismissButton)
@@ -176,6 +239,12 @@ class UpdaterBot(commands.Bot):
         requested_by: discord.abc.User,
         release: Release,
     ) -> None:
+        cooldown = float(self.config.get("action_cooldown_seconds", 30))
+        limited = self.rate_limiter.check_action(requested_by.id, cooldown)
+        if limited:
+            await channel.send(limited)
+            return
+
         if self.deploy_lock.locked():
             await channel.send(
                 "A deploy, rollback, or restart is already in progress; try again once it finishes."
@@ -212,6 +281,12 @@ class UpdaterBot(commands.Bot):
     async def run_rollback(
         self, channel: discord.abc.Messageable, requested_by: discord.abc.User
     ) -> None:
+        cooldown = float(self.config.get("action_cooldown_seconds", 30))
+        limited = self.rate_limiter.check_action(requested_by.id, cooldown)
+        if limited:
+            await channel.send(limited)
+            return
+
         if self.deploy_lock.locked():
             await channel.send(
                 "A deploy, rollback, or restart is already in progress; try again once it finishes."
@@ -248,6 +323,12 @@ class UpdaterBot(commands.Bot):
     async def run_restart(
         self, channel: discord.abc.Messageable, requested_by: discord.abc.User
     ) -> None:
+        cooldown = float(self.config.get("action_cooldown_seconds", 30))
+        limited = self.rate_limiter.check_action(requested_by.id, cooldown)
+        if limited:
+            await channel.send(limited)
+            return
+
         if self.deploy_lock.locked():
             await channel.send(
                 "A deploy, rollback, or restart is already in progress; try again once it finishes."
@@ -581,6 +662,19 @@ def register_commands(bot: UpdaterBot) -> None:
                 "Command is too long (max 200 characters).", ephemeral=True
             )
             return
+        if not console_command_allowed(bot.config, command):
+            await interaction.response.send_message(
+                "That command is not on the console allowlist. "
+                "See `console_command_allowlist` in config.json.",
+                ephemeral=True,
+            )
+            return
+
+        per_minute = int(bot.config.get("console_rate_limit_per_minute", 5))
+        limited = bot.rate_limiter.check_console(interaction.user.id, per_minute)
+        if limited:
+            await interaction.response.send_message(limited, ephemeral=True)
+            return
 
         await interaction.response.defer(ephemeral=True)
         wait = float(bot.config.get("console_response_wait_seconds", 2))
@@ -631,6 +725,7 @@ def main() -> None:
     if not token:
         raise SystemExit("DISCORD_BOT_TOKEN environment variable is not set.")
     config = load_config()
+    validate_config(config)
     UpdaterBot(config).run(token, log_handler=None)
 
 

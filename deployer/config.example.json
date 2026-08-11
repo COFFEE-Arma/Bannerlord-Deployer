@@ -6,8 +6,9 @@
   "guild_id": 0,
   "announce_channel_id": 0,
   "admin_role_ids": [],
+  "allow_guild_administrators": false,
 
-  "gameserver_container": "bannerlord-coop-server",
+  "gameserver_container": "bl-coop-gameserver",
 
   "server_dir": "/data/server",
   "staging_dir": "/data/staging",
@@ -22,5 +23,13 @@
 
   "save_command": "save",
   "save_wait_seconds": 8,
-  "console_response_wait_seconds": 2
+  "console_response_wait_seconds": 2,
+
+  "console_command_allowlist": [
+    "^help$",
+    "^save(\\s|$)",
+    "^coop\\.debug\\..+"
+  ],
+  "console_rate_limit_per_minute": 5,
+  "action_cooldown_seconds": 30
 }

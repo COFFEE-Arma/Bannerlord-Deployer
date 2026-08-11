@@ -1,158 +1,210 @@
-# Bannerlord Coop Updater
+# Bannerlord Deployer
 
-Docker Compose stack for hosting the [Bannerlord Coop](https://www.moddb.com/mods/bannerlord-coop)
-Console Server on Debian, with a Discord bot that:
+Unofficial Discord-controlled Docker stack for hosting the
+[Bannerlord Coop](https://www.moddb.com/mods/bannerlord-coop) **Console Server**
+on Linux.
 
-- polls ModDB for new **Console Server** versions (the mod team replaces the
-  same file entry in place, so the bot fingerprints the served file's name and
-  size rather than relying on new RSS items),
-- announces new uploads in your Discord channel with a **Deploy** button,
-- lets admins (by Discord role) deploy any known release or roll back to a backup,
-- stops/starts the game server container automatically during deploys and
-  preserves `server-config.json` and saves across updates.
+This project is **not affiliated with** TaleWorlds Entertainment or the
+Bannerlord Coop team. It automates downloading the Console Server package from
+ModDB and managing a Wine-based dedicated server container. It does **not**
+redistribute Bannerlord or Coop binaries.
+
+**License:** [PolyForm Noncommercial 1.0.0](LICENSE) (source-available, not OSI
+open source). Intended for personal and community self-hosting.
+
+**Public clone URL:** https://github.com/COFFEE-Arma/Bannerlord-Deployer.git  
+Development happens on a private GitLab remote; GitHub is the public mirror.
+
+## Requirements
+
+- **Linux** host (Debian/Ubuntu-class). The game server uses Docker
+  `network_mode: host`, which does **not** work the same on Docker Desktop for
+  macOS/Windows.
+- Docker Engine + Compose v2
+- Disk space for a ~4 GB ModDB archive plus extract and backups (plan on roughly
+  **3× archive size** free before a deploy)
+- Firewall / port forwards: **4200–4201** and **7210** (TCP and UDP)
+- A Discord application (bot token) and a role ID for operators
 
 ## Services
 
-| Service | Container | Purpose |
-| --- | --- | --- |
-| `gameserver` | `bannerlord-coop-server` | Runs `BannerlordCoopServer.exe` under Wine (WineHQ stable) |
-| `deployer` | `bannerlord-coop-deployer` | Discord bot + deploy pipeline; controls `gameserver` via the Docker socket |
+| Service | Purpose |
+| --- | --- |
+| `gameserver` | Runs `BannerlordCoopServer.exe` under Wine (WineHQ stable) |
+| `deployer` | Discord bot + deploy pipeline; controls `gameserver` via Docker |
+| `socket-proxy` | (recommended overlay) limited Docker API for the deployer |
 
-Both share the `./data` directory:
+Both game and deployer share `./data`:
 
 ```
 data/
-  server/       <- the Console Server install (BannerlordCoopServer.exe, server-config.json, ...)
-  server-data/  <- persistent server data (saves under CoopData/DedicatedServer/"Game Saves");
-                   symlinked into the wineprefix Documents folder by the entrypoint
-  staging/      <- downloads and extraction scratch space
-  backups/      <- tar.gz backups taken before each deploy (retention configurable)
+  server/       <- Console Server install
+  server-data/  <- saves / CoopData (outside install; survives deploys)
+  staging/      <- downloads and extraction scratch
+  backups/      <- tar.gz backups before each deploy
   wineprefix/   <- persistent Wine prefix
   state.json    <- seen releases, deployed version, backup metadata
 ```
 
-## Setup
+Set `COMPOSE_PROJECT_NAME` in `.env` (default example: `bl-coop`) so container
+names are unique if you run more than one stack on a host. Keep
+`gameserver_container` in `config.json` in sync with the gameserver container
+name Compose creates (see below).
 
-### 1. Create the Discord bot
+## Quick start (first-time install)
 
-1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) and
-   create an application, then add a **Bot** to it.
-2. Copy the bot token (this goes in `.env`).
-3. No privileged intents are required.
-4. Invite the bot to your server with an OAuth2 URL using scopes
-   `bot` + `applications.commands` and permissions **Send Messages** and
-   **Embed Links**:
+No existing Wine/screen install required.
+
+### 1. Discord bot
+
+1. Create an application at the [Discord Developer Portal](https://discord.com/developers/applications) and add a **Bot**.
+2. Copy the bot token into `.env` as `DISCORD_BOT_TOKEN`.
+3. Invite with scopes `bot` + `applications.commands` and permissions
+   **Send Messages** + **Embed Links**:
    `https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot%20applications.commands&permissions=18432`
 
 ### 2. Configure
 
-On the Debian host (requires Docker + the compose plugin: `apt install docker.io docker-compose-plugin`
-or follow [docs.docker.com/engine/install/debian](https://docs.docker.com/engine/install/debian/)):
-
 ```bash
-git clone <this repo> /opt/bannerlord-coop-updater
-cd /opt/bannerlord-coop-updater
+git clone https://github.com/COFFEE-Arma/Bannerlord-Deployer.git
+cd Bannerlord-Deployer
 
-cp .env.example .env                                    # fill in DISCORD_BOT_TOKEN
-cp deployer/config.example.json deployer/config.json    # fill in IDs below
+cp .env.example .env
+cp deployer/config.example.json deployer/config.json
 ```
 
-In `deployer/config.json` set:
+Edit `.env`:
 
-- `guild_id` — your Discord server ID (right-click server icon → Copy Server ID,
-  with Developer Mode enabled). Makes slash commands appear instantly.
-- `announce_channel_id` — the channel where update announcements are posted.
-- `admin_role_ids` — list of role IDs allowed to deploy/roll back (guild
-  administrators are always allowed).
+- `DISCORD_BOT_TOKEN`
+- `COMPOSE_PROJECT_NAME` (e.g. `bl-coop`)
+- `GAMESERVER_CONTAINER` — must match the gameserver container name (with the
+  default compose file: `${COMPOSE_PROJECT_NAME}-gameserver`)
 
-### 3. Migrate the existing install (from screen/Wine)
+Edit `deployer/config.json`:
+
+- `guild_id`, `announce_channel_id` (required; bot refuses to start if unset)
+- `admin_role_ids` — **required**; at least one role ID. Discord “Administrator”
+  permission does **not** grant deploy access unless you set
+  `allow_guild_administrators: true`
+- `gameserver_container` — same value as `GAMESERVER_CONTAINER`
+
+### 3. Start (recommended: socket proxy)
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.socket-proxy.yml up -d --build
+```
+
+(Trusted fallback: add `-f docker-compose.raw-socket.yml` instead of the socket-proxy file.)
+
+Then in Discord:
+
+1. `/checkupdates` — seed ModDB releases (first poll does not spam announcements)
+2. `/deploy` — download and install the Console Server package into `data/server`
+3. Wait for the gameserver to finish booting (up to ~2 minutes before it accepts connections)
+
+Alternatively, manually download the Console Server from ModDB, extract it into
+`data/server/`, then start only the gameserver service.
+
+### 4. Saves
+
+On first boot the server creates data under
+`data/server-data/CoopData/DedicatedServer/` (including `Game Saves/`). Put
+campaign `.sav` / `.json` pairs there if you are migrating an existing world.
+The entrypoint symlinks the Wine Documents path to `data/server-data` so saves
+are not wiped by deploys.
+
+## Migrating from screen/Wine
 
 ```bash
 mkdir -p data/server
-
-# Stop the currently running server first (inside your screen session, or:)
-screen -S <session-name> -X quit
-
-# Copy the existing install, including server-config.json
+screen -S <session-name> -X quit   # stop the old process
 cp -a /path/to/current/server/. data/server/
-
-# Put existing campaign saves (<name>.sav + <name>.json pairs) where the
-# server reads them:
 mkdir -p "data/server-data/CoopData/DedicatedServer/Game Saves"
 cp -a /path/to/old/saves/. "data/server-data/CoopData/DedicatedServer/Game Saves/"
 ```
 
-The Console Server stores its persistent data (campaign saves, config backups)
-under `Documents\Mount and Blade II Bannerlord\` inside the Wine prefix, in
-`CoopData\DedicatedServer\Game Saves\`. The container entrypoint symlinks that
-Documents folder to `data/server-data/`, so all of it lives on the volume,
-outside the install dir, where deploys and rollbacks never touch it.
+Then bring the stack up as in Quick start.
 
-### 4. Start
+## Discord commands
+
+All mutating commands require a role listed in `admin_role_ids`.
+
+| Command | Description |
+| --- | --- |
+| Announcement **Deploy** button | Deploy the announced ModDB file (with confirm) |
+| `/deploy` | Pick a known release and deploy |
+| `/rollback` | Restore the newest pre-deploy backup |
+| `/restart` | Run `save_command`, stop container, start again |
+| `/console` | Send one line to the server console (allowlisted) |
+| `/status` | Container + release status |
+| `/checkupdates` | Poll ModDB immediately |
+
+`/console` only accepts commands matching `console_command_allowlist` (defaults:
+`help`, `save…`, `coop.debug.…`). To allow any command, set the allowlist to
+`["^.*$"]`. An empty allowlist denies all console commands.
+
+## ModDB behavior
+
+- The Coop team often **replaces the same ModDB file** instead of uploading a new
+  entry. The bot fingerprints **filename + size** via a HEAD on the download
+  mirror, not RSS `pubDate` alone.
+- RSS is used to discover matching “Console Server” file IDs.
+- ModDB HTML pages are frequently behind Cloudflare; this bot does **not** scrape
+  those pages. It uses `/downloads/start/<id>` and the mirror URL instead.
+- Archives are large (~4 GB). Deploys check free disk (~3× size) before downloading.
+
+## Security
+
+**Preferred:** run with `docker-compose.socket-proxy.yml` so the deployer only
+talks to a locked-down Docker API (start/stop/logs/attach), not the raw host
+socket.
 
 ```bash
-docker compose up -d --build
+docker compose -f docker-compose.yml -f docker-compose.socket-proxy.yml up -d --build
 ```
 
-- The game server uses host networking (Docker NAT breaks its UDP traffic and
-  advertised IP), so it listens directly on ports 4200-4201 (game, TCP+UDP)
-  and 7210 (Steam/query, TCP+UDP); make sure these are open in your firewall.
-- The bot logs in, syncs slash commands, and starts polling ModDB every 30 minutes
-  (configurable via `poll_interval_minutes`).
-- On the very first poll, existing ModDB uploads are recorded **without** being
-  announced (no spam); they are still selectable via `/deploy`.
-- Check logs with `docker compose logs -f deployer` and `docker compose logs -f gameserver`.
+**Fallback (trusted hosts only):**
 
-If the game server exits immediately because Wine cannot run headless, set
-`USE_XVFB=1` in `.env` and run `docker compose up -d gameserver` again — this
-wraps the server in a virtual framebuffer.
+```bash
+docker compose -f docker-compose.yml -f docker-compose.raw-socket.yml up -d --build
+```
 
-## Discord usage
+This mounts `/var/run/docker.sock` into the deployer. A stolen bot token can then
+mean full Docker (≈ root) on the host.
 
-- **Announcement**: when a new Console Server file appears on ModDB, or the
-  existing file is replaced with a new version, the bot posts an embed with
-  **Deploy** and **Dismiss** buttons (admin-only).
-- `/deploy` — pick any known release from a dropdown and deploy it (with confirmation).
-- `/rollback` — restore the most recent pre-deploy backup (with confirmation).
-- `/restart` — save the campaign via the server console, then stop and start the
-  container (with confirmation). The save command defaults to `save` and is
-  configurable via `save_command` in `config.json`.
-- `/console` — send a single-line command to the gameserver console and return
-  captured output (admin-only, ephemeral).
-- `/status` — container state, deployed release, latest known release, backup count.
-- `/checkupdates` — poll ModDB immediately instead of waiting for the next cycle.
+Other notes:
 
-A deploy does the following, reporting progress in the channel:
+- `admin_role_ids` is mandatory at startup.
+- Guild Administrator bypass is **off** by default (`allow_guild_administrators`).
+- `/console` is allowlisted; treat allowlist expansion as privilege escalation.
+- Rate limits apply per Discord user (`console_rate_limit_per_minute`,
+  `action_cooldown_seconds`).
 
-1. Resolves the ModDB mirror and downloads the archive to `data/staging`
-   (checks ~3x the archive size in free disk space first).
-2. Extracts the archive (7z/zip/tar supported) and locates the folder containing
-   `BannerlordCoopServer.exe`.
-3. Stops the `gameserver` container (90s grace).
-4. Backs up `data/server` to `data/backups/server-<timestamp>.tar.gz` and prunes
-   old backups beyond `backup_retention`.
-5. Copies the new files over the install, then restores the preserved files
-   (`preserve` globs in config — by default the install-dir `server-config.json`;
-   the live config and saves are in `data/server-data`, untouched by deploys).
-6. Starts the container, confirms it is running, and notes that the server may
-   take up to 2 minutes before accepting connections.
+## Configuration reference
 
-Only one deploy/rollback can run at a time.
+See [deployer/config.example.json](deployer/config.example.json) for all keys,
+including:
 
-## Security note
+- `allow_guild_administrators`
+- `console_command_allowlist`
+- `console_rate_limit_per_minute` / `action_cooldown_seconds`
+- `save_command` / `save_wait_seconds`
+- `gameserver_container`
 
-The deployer mounts `/var/run/docker.sock`, which is effectively root access to
-the host. Deploy actions are gated behind the Discord admin role allowlist, but
-treat the bot token accordingly (anyone who controls the bot application can
-execute deploys). If you want tighter isolation later, put a docker socket proxy
-(e.g. `tecnativa/docker-socket-proxy` with only container start/stop allowed)
-between the deployer and the socket.
+## Maintainer: mirror to GitHub
 
-## Development / verification
+GitLab (`origin`) is the development remote. After merging to `main` there:
 
-`deployer/dry_run_test.py` exercises the full deploy + rollback pipeline locally
-with a fake archive and a mocked Docker client (no Discord or Docker needed):
+```bash
+git remote add github https://github.com/COFFEE-Arma/Bannerlord-Deployer.git   # once
+git push origin main
+git push github main
+```
+
+## Development
 
 ```bash
 python deployer/dry_run_test.py
 ```
+
+GitHub Actions runs the same dry-run test on pushes and pull requests.

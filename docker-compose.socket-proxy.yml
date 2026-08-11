@@ -1,0 +1,32 @@
+# Recommended: limited Docker API for the deployer.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.socket-proxy.yml up -d --build
+
+services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: ${COMPOSE_PROJECT_NAME:-bl-coop}-socket-proxy
+    restart: unless-stopped
+    environment:
+      - CONTAINERS=1
+      - POST=1
+      - ALLOW_START=1
+      - ALLOW_STOP=1
+      - ALLOW_RESTARTS=1
+      - EXEC=0
+      - IMAGES=0
+      - NETWORKS=0
+      - VOLUMES=0
+      - SERVICES=0
+      - TASKS=0
+      - INFO=1
+      - EVENTS=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  deployer:
+    environment:
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - DOCKER_HOST=tcp://socket-proxy:2375
+    depends_on:
+      - socket-proxy

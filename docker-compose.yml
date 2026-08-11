@@ -1,16 +1,15 @@
 services:
   gameserver:
     build: ./gameserver
-    container_name: bannerlord-coop-server
+    container_name: ${GAMESERVER_CONTAINER:-bl-coop-gameserver}
     restart: unless-stopped
     # Keep stdin open so the deployer can send console commands (/console in
     # Discord) to the server process.
     stdin_open: true
     # Host networking instead of published ports: behind Docker's NAT the server
     # binds/advertises the container's internal IP, which breaks direct UDP
-    # connects and Steam query. This matches how the server networked when it
-    # ran directly on the host. Needs ports 4200-4201 and 7210 (TCP+UDP) open
-    # in the host firewall.
+    # connects and Steam query. Linux hosts only (not Docker Desktop macOS/Windows).
+    # Needs ports 4200-4201 and 7210 (TCP+UDP) open in the host firewall.
     network_mode: host
     environment:
       - USE_XVFB=${USE_XVFB:-0}
@@ -24,14 +23,13 @@ services:
 
   deployer:
     build: ./deployer
-    container_name: bannerlord-coop-deployer
+    container_name: ${COMPOSE_PROJECT_NAME:-bl-coop}-deployer
     restart: unless-stopped
     environment:
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
     volumes:
       - ./data:/data
       - ./deployer/config.json:/app/config.json:ro
-      # Docker socket so the deployer can stop/start the gameserver container.
-      # This grants host-level Docker control; deploy actions are gated behind
-      # the Discord admin role allowlist in config.json.
-      - /var/run/docker.sock:/var/run/docker.sock
+    # Docker access comes from an overlay:
+    #   -f docker-compose.socket-proxy.yml  (recommended)
+    #   -f docker-compose.raw-socket.yml    (trusted hosts only)

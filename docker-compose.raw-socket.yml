@@ -1,0 +1,13 @@
+# Fallback for trusted single-admin hosts only. Mounts the raw Docker socket
+# into the deployer (stolen bot token ≈ root on the host).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.raw-socket.yml up -d --build
+#
+# Prefer docker-compose.socket-proxy.yml for any shared or public-facing bot.
+
+services:
+  deployer:
+    volumes:
+      - ./data:/data
+      - ./deployer/config.json:/app/config.json:ro
+      - /var/run/docker.sock:/var/run/docker.sock
