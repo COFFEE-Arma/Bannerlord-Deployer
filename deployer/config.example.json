@@ -18,5 +18,9 @@
     "server-config.json"
   ],
 
-  "backup_retention": 3
+  "backup_retention": 3,
+
+  "save_command": "save",
+  "save_wait_seconds": 8,
+  "console_response_wait_seconds": 2
 }

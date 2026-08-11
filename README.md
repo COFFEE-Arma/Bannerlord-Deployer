@@ -114,6 +114,11 @@ wraps the server in a virtual framebuffer.
   **Deploy** and **Dismiss** buttons (admin-only).
 - `/deploy` — pick any known release from a dropdown and deploy it (with confirmation).
 - `/rollback` — restore the most recent pre-deploy backup (with confirmation).
+- `/restart` — save the campaign via the server console, then stop and start the
+  container (with confirmation). The save command defaults to `save` and is
+  configurable via `save_command` in `config.json`.
+- `/console` — send a single-line command to the gameserver console and return
+  captured output (admin-only, ephemeral).
 - `/status` — container state, deployed release, latest known release, backup count.
 - `/checkupdates` — poll ModDB immediately instead of waiting for the next cycle.
 

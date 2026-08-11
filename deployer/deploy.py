@@ -70,6 +70,46 @@ class Deployer:
         output = container.logs(since=since).decode("utf-8", errors="replace").strip()
         return output
 
+    def restart(self, progress_cb=None) -> dict:
+        """Save campaign state via console, then stop and start the container."""
+        started = time.monotonic()
+
+        def report(message: str) -> None:
+            log.info("[restart] %s", message)
+            if progress_cb:
+                progress_cb(message)
+
+        container = self._container()
+        if container is not None and container.status == "running":
+            save_cmd = (self.config.get("save_command") or "save").strip()
+            wait = float(self.config.get("save_wait_seconds", 8))
+            report(f"Sending save command (`{save_cmd}`)...")
+            try:
+                output = self.send_command(save_cmd, response_wait=wait)
+                if output:
+                    # Keep progress messages short; full output goes to Discord separately if needed.
+                    first_line = output.splitlines()[0][:120]
+                    report(f"Save command acknowledged: {first_line}")
+                else:
+                    report("Save command sent (no console output captured).")
+            except DeployError as exc:
+                raise DeployError(f"Could not save before restart: {exc}") from exc
+        else:
+            report("Gameserver is not running; skipping save.")
+
+        self._stop_server(report)
+        self._start_server(report)
+
+        time.sleep(STARTUP_CHECK_WAIT_SECONDS)
+        duration = int(time.monotonic() - started)
+        report(f"Restart finished in {duration}s.")
+        deployed = self.state.deployed
+        return {
+            "release": deployed.label if deployed else "(current install)",
+            "duration_s": duration,
+            "container_status": self.container_status(),
+        }
+
     def _stop_server(self, report) -> None:
         container = self._container()
         if container is None:

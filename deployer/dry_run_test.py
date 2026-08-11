@@ -26,6 +26,7 @@ class FakeContainer:
     def __init__(self):
         self.status = "running"
         self.events: list[str] = []
+        self.stdin_writes: list[bytes] = []
 
     def stop(self, timeout=None):
         self.events.append("stop")
@@ -35,8 +36,27 @@ class FakeContainer:
         self.events.append("start")
         self.status = "running"
 
-    def logs(self, tail=30):
+    def logs(self, tail=30, since=None):
+        if since is not None:
+            return b"[fake server] save complete"
         return b"[fake server] listening on port 4201"
+
+    def attach_socket(self, params=None):
+        container = self
+
+        class FakeSock:
+            class _Sock:
+                @staticmethod
+                def sendall(data: bytes):
+                    container.stdin_writes.append(data)
+                    container.events.append("stdin")
+
+            _sock = _Sock()
+
+            def close(self):
+                pass
+
+        return FakeSock()
 
 
 FAKE_CONTAINER = FakeContainer()
@@ -66,7 +86,7 @@ from deploy import Deployer  # noqa: E402
 from moddb import Release  # noqa: E402
 from state import State  # noqa: E402
 
-deploy.STARTUP_LOG_WAIT_SECONDS = 0
+deploy.STARTUP_CHECK_WAIT_SECONDS = 0
 
 
 def check(condition: bool, label: str) -> None:
@@ -105,7 +125,8 @@ def main() -> None:
         "gameserver_container": "bannerlord-coop-server",
         "preserve": ["server-config.json", "Saves/**/*"],
         "backup_retention": 3,
-        "log_tail_lines": 30,
+        "save_command": "save",
+        "save_wait_seconds": 0,
     }
     state = State(root / "state.json")
     deployer = Deployer(config, state)
@@ -158,6 +179,18 @@ def main() -> None:
     check((server / "Saves" / "campaign1.sav").exists(), "saves restored")
     check(FAKE_CONTAINER.events == ["stop", "start", "stop", "start"], "container cycled for rollback")
     check(len(state.backups) == 0, "consumed backup removed from state")
+
+    print("\n== console + restart ==")
+    out = deployer.send_command("help", response_wait=0)
+    check(b"help\n" in FAKE_CONTAINER.stdin_writes[-1], "console command written to stdin")
+    check("save complete" in out, "console captures following logs")
+
+    FAKE_CONTAINER.events.clear()
+    FAKE_CONTAINER.stdin_writes.clear()
+    restart_report = deployer.restart(progress_cb=lambda m: print(f"    {m}"))
+    check(FAKE_CONTAINER.stdin_writes and b"save\n" in FAKE_CONTAINER.stdin_writes[0], "restart sends save")
+    check(FAKE_CONTAINER.events == ["stdin", "stop", "start"], "restart save then stop/start")
+    check(restart_report["container_status"] == "running", "container running after restart")
 
     shutil.rmtree(root, ignore_errors=True)
     print("\nAll dry-run checks passed.")

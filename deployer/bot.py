@@ -177,7 +177,9 @@ class UpdaterBot(commands.Bot):
         release: Release,
     ) -> None:
         if self.deploy_lock.locked():
-            await channel.send("A deploy or rollback is already in progress; try again once it finishes.")
+            await channel.send(
+                "A deploy, rollback, or restart is already in progress; try again once it finishes."
+            )
             return
 
         async with self.deploy_lock:
@@ -211,7 +213,9 @@ class UpdaterBot(commands.Bot):
         self, channel: discord.abc.Messageable, requested_by: discord.abc.User
     ) -> None:
         if self.deploy_lock.locked():
-            await channel.send("A deploy or rollback is already in progress; try again once it finishes.")
+            await channel.send(
+                "A deploy, rollback, or restart is already in progress; try again once it finishes."
+            )
             return
 
         async with self.deploy_lock:
@@ -240,6 +244,42 @@ class UpdaterBot(commands.Bot):
 
             await reporter.flush(force=True)
             await channel.send(embed=self._result_embed("Rollback complete", report))
+
+    async def run_restart(
+        self, channel: discord.abc.Messageable, requested_by: discord.abc.User
+    ) -> None:
+        if self.deploy_lock.locked():
+            await channel.send(
+                "A deploy, rollback, or restart is already in progress; try again once it finishes."
+            )
+            return
+
+        async with self.deploy_lock:
+            title = "Restarting gameserver"
+            message = await channel.send(
+                embed=discord.Embed(
+                    title=title,
+                    description=f"Requested by {requested_by.mention}",
+                    color=EMBED_COLOR_PROGRESS,
+                )
+            )
+            reporter = ProgressReporter(message, title, asyncio.get_running_loop())
+            try:
+                report = await asyncio.to_thread(self.deployer.restart, reporter)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("Restart failed")
+                await reporter.flush(force=True)
+                await channel.send(
+                    embed=discord.Embed(
+                        title="Restart failed",
+                        description=f"`{type(exc).__name__}`: {str(exc)[:1500]}",
+                        color=EMBED_COLOR_ERROR,
+                    )
+                )
+                return
+
+            await reporter.flush(force=True)
+            await channel.send(embed=self._result_embed("Restart complete", report))
 
     @staticmethod
     def _result_embed(title: str, report: dict) -> discord.Embed:
@@ -377,6 +417,21 @@ class ConfirmRollbackView(discord.ui.View):
         await interaction.response.edit_message(content="Rollback cancelled.", view=None)
 
 
+class ConfirmRestartView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+
+    @discord.ui.button(label="Confirm restart", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        bot: UpdaterBot = interaction.client
+        await interaction.response.edit_message(content="Restart started.", view=None)
+        await bot.run_restart(interaction.channel, interaction.user)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.edit_message(content="Restart cancelled.", view=None)
+
+
 class ReleaseSelectView(discord.ui.View):
     def __init__(self, releases: list[Release]):
         super().__init__(timeout=120)
@@ -500,6 +555,75 @@ def register_commands(bot: UpdaterBot) -> None:
             )
         else:
             await interaction.followup.send("No new releases found.", ephemeral=True)
+
+    @bot.tree.command(
+        name="console",
+        description="Send a command to the gameserver console (admin only)",
+    )
+    async def console_cmd(interaction: discord.Interaction, command: str) -> None:
+        if not admin_only(interaction):
+            await interaction.response.send_message(
+                "You need the server admin role to use the server console.", ephemeral=True
+            )
+            return
+
+        command = command.strip()
+        if not command:
+            await interaction.response.send_message("Command cannot be empty.", ephemeral=True)
+            return
+        if "\n" in command or "\r" in command:
+            await interaction.response.send_message(
+                "Only a single-line command is allowed.", ephemeral=True
+            )
+            return
+        if len(command) > 200:
+            await interaction.response.send_message(
+                "Command is too long (max 200 characters).", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        wait = float(bot.config.get("console_response_wait_seconds", 2))
+        try:
+            output = await asyncio.to_thread(bot.deployer.send_command, command, wait)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Console command failed")
+            await interaction.followup.send(
+                f"Failed to send command: `{type(exc).__name__}`: {str(exc)[:500]}",
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(
+            title="Console command",
+            color=EMBED_COLOR_INFO,
+        )
+        embed.add_field(name="Command", value=f"`{command}`", inline=False)
+        body = output if output else "(no output captured in the wait window)"
+        if len(body) > 3500:
+            body = body[-3500:]
+            body = "…\n" + body
+        embed.add_field(name="Response", value=f"```\n{body}\n```", inline=False)
+        embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @bot.tree.command(
+        name="restart",
+        description="Save the campaign, then stop and restart the gameserver container",
+    )
+    async def restart_cmd(interaction: discord.Interaction) -> None:
+        if not admin_only(interaction):
+            await interaction.response.send_message(
+                "You need the server admin role to restart the server.", ephemeral=True
+            )
+            return
+        save_cmd = bot.config.get("save_command") or "save"
+        await interaction.response.send_message(
+            f"Restart the gameserver? This will run `{save_cmd}`, stop the container, "
+            "and start it again. Players will be disconnected.",
+            view=ConfirmRestartView(),
+            ephemeral=True,
+        )
 
 
 def main() -> None:
