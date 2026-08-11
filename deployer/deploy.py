@@ -50,6 +50,26 @@ class Deployer:
         container = self._container()
         return container.status if container else "not created"
 
+    def send_command(self, command: str, response_wait: float = 2.0) -> str:
+        """Write a console command to the gameserver's stdin and return the log
+        output that follows. Requires `stdin_open: true` on the container."""
+        container = self._container()
+        if container is None or container.status != "running":
+            raise DeployError("The gameserver container is not running.")
+
+        since = datetime.now(timezone.utc)
+        sock = container.attach_socket(params={"stdin": 1, "stream": 1})
+        try:
+            # docker-py returns a SocketIO wrapper; the underlying socket is the
+            # documented way to write to attached stdin.
+            sock._sock.sendall(command.encode("utf-8") + b"\n")
+        finally:
+            sock.close()
+
+        time.sleep(response_wait)
+        output = container.logs(since=since).decode("utf-8", errors="replace").strip()
+        return output
+
     def _stop_server(self, report) -> None:
         container = self._container()
         if container is None:

@@ -3,6 +3,9 @@ services:
     build: ./gameserver
     container_name: bannerlord-coop-server
     restart: unless-stopped
+    # Keep stdin open so the deployer can send console commands (/console in
+    # Discord) to the server process.
+    stdin_open: true
     # Host networking instead of published ports: behind Docker's NAT the server
     # binds/advertises the container's internal IP, which breaks direct UDP
     # connects and Steam query. This matches how the server networked when it
