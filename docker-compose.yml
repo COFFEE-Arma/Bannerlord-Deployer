@@ -1,0 +1,34 @@
+services:
+  gameserver:
+    build: ./gameserver
+    container_name: bannerlord-coop-server
+    restart: unless-stopped
+    # Host networking instead of published ports: behind Docker's NAT the server
+    # binds/advertises the container's internal IP, which breaks direct UDP
+    # connects and Steam query. This matches how the server networked when it
+    # ran directly on the host. Needs ports 4200-4201 and 7210 (TCP+UDP) open
+    # in the host firewall.
+    network_mode: host
+    environment:
+      - USE_XVFB=${USE_XVFB:-0}
+      # Persistent data root hint for coop server builds that honor it. The
+      # current Console Server build ignores this and writes to Documents inside
+      # the wine prefix instead; the entrypoint symlinks that folder to
+      # /data/server-data, so data ends up there either way.
+      - BANNERLORD_USER_DIR=Z:\data\server-data
+    volumes:
+      - ./data:/data
+
+  deployer:
+    build: ./deployer
+    container_name: bannerlord-coop-deployer
+    restart: unless-stopped
+    environment:
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+    volumes:
+      - ./data:/data
+      - ./deployer/config.json:/app/config.json:ro
+      # Docker socket so the deployer can stop/start the gameserver container.
+      # This grants host-level Docker control; deploy actions are gated behind
+      # the Discord admin role allowlist in config.json.
+      - /var/run/docker.sock:/var/run/docker.sock
