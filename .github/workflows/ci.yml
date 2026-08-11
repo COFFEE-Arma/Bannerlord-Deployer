@@ -13,5 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r deployer/requirements.txt
       - name: Run deploy pipeline dry-run
         run: python deployer/dry_run_test.py
