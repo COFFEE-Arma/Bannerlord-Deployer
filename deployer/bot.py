@@ -17,6 +17,7 @@ import moddb
 from deploy import Deployer
 from moddb import Release
 from state import State
+import telemetry
 
 logging.basicConfig(
     level=logging.INFO,
@@ -165,10 +166,25 @@ class UpdaterBot(commands.Bot):
         self.poll_feed.change_interval(minutes=int(self.config.get("poll_interval_minutes", 30)))
         self.poll_feed.start()
 
+        if telemetry.telemetry_enabled(self.config):
+            hours = float((self.config.get("telemetry") or {}).get("interval_hours", 12))
+            self.telemetry_heartbeat.change_interval(hours=max(hours, 1.0))
+            self.telemetry_heartbeat.start()
+            # First ping soon after boot (don't block setup_hook on network).
+            self.loop.create_task(asyncio.to_thread(telemetry.send_heartbeat, self.config, self.state))
+
     async def on_ready(self) -> None:
         log.info("Logged in as %s (id %s)", self.user, self.user.id)
 
     # -- feed polling ---------------------------------------------------------
+
+    @tasks.loop(hours=12)
+    async def telemetry_heartbeat(self) -> None:
+        await asyncio.to_thread(telemetry.send_heartbeat, self.config, self.state)
+
+    @telemetry_heartbeat.before_loop
+    async def before_telemetry(self) -> None:
+        await self.wait_until_ready()
 
     @tasks.loop(minutes=30)
     async def poll_feed(self) -> None:

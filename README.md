@@ -14,6 +14,14 @@ open source). Intended for personal and community self-hosting.
 **Public clone URL:** [https://github.com/COFFEE-Arma/Bannerlord-Deployer.git](https://github.com/COFFEE-Arma/Bannerlord-Deployer.git)  
 Development happens on a private GitLab remote; GitHub is the public mirror.
 
+### Anonymous usage telemetry
+
+By default the deployer periodically sends an anonymous heartbeat (random
+install UUID + optional version string) so the maintainers can see how many
+public installs are active. No Discord IDs, server IPs, or configs are sent.
+Disable with `TELEMETRY_ENABLED=0` in `.env` or `"telemetry": { "enabled": false }`
+in `config.json`.
+
 ## Requirements
 
 - **Linux** host (Debian/Ubuntu-class). The game server uses Docker
@@ -201,6 +209,7 @@ including:
 - `allow_guild_administrators`
 - `console_command_allowlist`
 - `console_rate_limit_per_minute` / `action_cooldown_seconds`
+- `telemetry` (`enabled`, `url`, `interval_hours`)
 - `save_command` / `save_wait_seconds`
 - `gameserver_container`
 

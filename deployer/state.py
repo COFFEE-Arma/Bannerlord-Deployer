@@ -18,6 +18,7 @@ class State:
             "releases": {},  # file_id (str) -> release dict
             "deployed": None,  # release dict currently on the server
             "backups": [],  # newest first: {"file": str, "created": str, "deployed_before": dict|None}
+            "install_id": None,  # anonymous UUID for optional usage telemetry
         }
         if path.exists():
             self._data.update(json.loads(path.read_text(encoding="utf-8")))
@@ -79,4 +80,16 @@ class State:
     def set_backups(self, backups: list[dict]) -> None:
         with self._lock:
             self._data["backups"] = backups
+            self._save()
+
+    # -- telemetry ----------------------------------------------------------
+
+    @property
+    def install_id(self) -> str | None:
+        value = self._data.get("install_id")
+        return str(value) if value else None
+
+    def set_install_id(self, install_id: str) -> None:
+        with self._lock:
+            self._data["install_id"] = install_id
             self._save()

@@ -31,5 +31,11 @@
     "^coop\\.debug\\..+"
   ],
   "console_rate_limit_per_minute": 5,
-  "action_cooldown_seconds": 30
+  "action_cooldown_seconds": 30,
+
+  "telemetry": {
+    "enabled": true,
+    "url": "https://deployer-telemetry.arma.coffee/v1/heartbeat",
+    "interval_hours": 12
+  }
 }
